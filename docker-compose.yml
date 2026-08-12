@@ -1,0 +1,51 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-demo}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-demo}
+      NEWS_PROVIDER: ${NEWS_PROVIDER:-demo}
+      CORS_ORIGINS: http://localhost:8080
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      GROQ_REASONING_EFFORT: ${GROQ_REASONING_EFFORT:-low}
+      GROQ_TIMEOUT: ${GROQ_TIMEOUT:-35}
+      GROQ_MAX_RETRIES: ${GROQ_MAX_RETRIES:-1}
+      GROQ_MAX_TOKENS: ${GROQ_MAX_TOKENS:-1800}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-oss-20b:free}
+      OPENROUTER_REASONING_EFFORT: ${OPENROUTER_REASONING_EFFORT:-low}
+      OPENROUTER_PROVIDER_SORT: ${OPENROUTER_PROVIDER_SORT:-latency}
+      OPENROUTER_DATA_COLLECTION: ${OPENROUTER_DATA_COLLECTION:-}
+      OPENROUTER_TIMEOUT: ${OPENROUTER_TIMEOUT:-35}
+      SEARCH_RESULTS_PER_SOURCE: ${SEARCH_RESULTS_PER_SOURCE:-2}
+      SEARCH_FETCH_PER_SOURCE: ${SEARCH_FETCH_PER_SOURCE:-1}
+      SEARCH_MAX_WORKERS: ${SEARCH_MAX_WORKERS:-4}
+      SEARCH_TIMEOUT: ${SEARCH_TIMEOUT:-8}
+      DDGS_TEXT_BACKENDS: ${DDGS_TEXT_BACKENDS:-brave,bing,duckduckgo}
+      DDGS_NEWS_BACKENDS: ${DDGS_NEWS_BACKENDS:-bing,yahoo,duckduckgo}
+      PAGE_FETCH_TIMEOUT: ${PAGE_FETCH_TIMEOUT:-8}
+      PAGE_MAX_BYTES: ${PAGE_MAX_BYTES:-1000000}
+      PAGE_REDIRECT_LIMIT: ${PAGE_REDIRECT_LIMIT:-3}
+      EVIDENCE_CHARS_PER_SOURCE: ${EVIDENCE_CHARS_PER_SOURCE:-3500}
+      EVIDENCE_TOTAL_CHARS: ${EVIDENCE_TOTAL_CHARS:-12000}
+      RETRIEVAL_CACHE_TTL_SECONDS: ${RETRIEVAL_CACHE_TTL_SECONDS:-900}
+      NEWS_RESULTS_LIMIT: ${NEWS_RESULTS_LIMIT:-30}
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS:-45000}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
