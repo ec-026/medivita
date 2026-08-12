@@ -57,10 +57,12 @@ test('primary navigation opens Health Check', async () => {
 test('desktop sidebars collapse independently and persist across remounts', async () => {
   mockApi()
   const firstRender = renderApp()
+  expect(screen.getByRole('link', { name: "Visit Tejas Singh's portfolio" })).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Collapse navigation sidebar' }))
   expect(localStorage.getItem('medivita:left-sidebar-collapsed')).toBe('true')
   expect(screen.getByRole('button', { name: 'Expand navigation sidebar' })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('title', 'Chat')
+  expect(screen.queryByRole('link', { name: "Visit Tejas Singh's portfolio" })).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Collapse context sidebar' })).toBeInTheDocument()
 
   await userEvent.click(screen.getByRole('button', { name: 'Collapse context sidebar' }))
@@ -82,11 +84,22 @@ test('conversation history scrolls independently from the privacy footer', () =>
   expect(screen.getByTestId('conversation-region')).toContainElement(conversationScroll)
 })
 
+test('creator credit links safely to the portfolio outside conversation scrolling', () => {
+  mockApi(); renderApp()
+  const credit = screen.getByRole('link', { name: "Visit Tejas Singh's portfolio" })
+  expect(credit).toHaveAttribute('href', 'https://tejas-singh.pages.dev/')
+  expect(credit).toHaveAttribute('target', '_blank')
+  expect(credit).toHaveAttribute('rel', 'noopener noreferrer')
+  expect(screen.getByTestId('conversation-scroll')).not.toContainElement(credit)
+  expect(screen.getByTestId('privacy-footer').compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})
+
 test('mobile header opens separate navigation and source drawers', async () => {
   mockApi(); renderApp()
   await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }))
   const navigation = screen.getByRole('dialog', { name: 'Navigation' })
   expect(within(navigation).getByRole('link', { name: 'Health Check' })).toBeInTheDocument()
+  expect(within(navigation).getByRole('link', { name: "Visit Tejas Singh's portfolio" })).toHaveAttribute('href', 'https://tejas-singh.pages.dev/')
   await userEvent.click(screen.getByRole('button', { name: 'Close navigation' }))
 
   await userEvent.click(screen.getByRole('button', { name: 'Open trusted sources panel' }))

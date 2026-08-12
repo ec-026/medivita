@@ -1,6 +1,7 @@
 import {
   Activity,
   Ellipsis,
+  ExternalLink,
   MessageSquare,
   Newspaper,
   PanelLeftClose,
@@ -204,6 +205,17 @@ export function Sidebar({
         </div>
       </div>
       <div className="mx-1 mt-3 shrink-0 rounded-xl bg-lime-pale p-3" data-testid="privacy-footer"><p className="text-[13px] font-semibold leading-5 text-lime-dark">Private by design</p><p className="text-[12px] leading-4 text-muted">Conversations stay in this browser.</p></div>
+      <a
+        href="https://tejas-singh.pages.dev/"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Visit Tejas Singh's portfolio"
+        title="View Tejas Singh's portfolio"
+        className="focus-ring mx-1 mt-1.5 flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-[13px] text-muted transition hover:bg-surface-muted hover:text-brand-dark hover:underline"
+      >
+        <span>Built by <span className="font-semibold text-ink">Tejas Singh</span></span>
+        <ExternalLink size={13} aria-hidden="true" />
+      </a>
     </>}
 
     {compact && <button type="button" onClick={onToggle} aria-label="Expand navigation sidebar" title="Expand sidebar" className="ghost-button mt-auto h-11 w-11"><PanelLeftOpen size={18} /></button>}
