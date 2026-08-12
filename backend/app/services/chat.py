@@ -87,6 +87,7 @@ class ChatService:
                 message="Urgent-care notice added" if urgent else None,
             )
         provider_name = self.config["LLM_PROVIDER"]
+        response_kind = None
         if provider_name == "demo":
             search = build_search_provider("demo")
             references = [
@@ -111,14 +112,28 @@ class ChatService:
                 if trace
                 else build_research_controller(self.config)
             )
-            final, references, _rounds = controller.chat(message, source_ids, history)
-            answer = final.overview
-            sections = [
-                {"title": "Overview", "content": final.overview},
-                {"title": "Possible considerations", "content": final.possible_considerations},
-                {"title": "What may help", "content": final.what_may_help},
-                {"title": "When to seek medical care", "content": final.when_to_seek_medical_care},
-            ]
+            outcome, references, _calls = controller.chat(message, source_ids, history)
+            response_kind = outcome.response_kind
+            answer = outcome.answer
+            if outcome.grounded_answer is not None:
+                final = outcome.grounded_answer
+                sections = [
+                    {"title": "Overview", "content": final.overview},
+                    {"title": "Possible considerations", "content": final.possible_considerations},
+                    {"title": "What may help", "content": final.what_may_help},
+                    {"title": "When to seek medical care", "content": final.when_to_seek_medical_care},
+                ]
+            else:
+                sections = [
+                    {
+                        "title": (
+                            "A quick question"
+                            if outcome.response_kind == "clarification"
+                            else "Response"
+                        ),
+                        "content": outcome.answer,
+                    }
+                ]
         response = {
             "answer": answer,
             "sections": sections,
@@ -127,6 +142,8 @@ class ChatService:
             "mode": "demo" if provider_name == "demo" else "connected",
             "disclaimer": "General health information only; not medical advice, diagnosis, or treatment.",
         }
+        if response_kind is not None:
+            response["response_kind"] = response_kind
         if trace:
             response["research_trace"] = trace.events
             response["research_summary"] = trace.summary

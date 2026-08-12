@@ -60,7 +60,22 @@ class EvidenceItem:
 class TargetedSearch(BaseModel):
     source_id: str = Field(description="One enabled source ID")
     query: str = Field(min_length=3, max_length=300)
-    reason: str = Field(default="", max_length=300)
+
+
+class ChatPlan(BaseModel):
+    action: Literal["direct", "research", "clarify"]
+    intent: Literal[
+        "greeting",
+        "conversation",
+        "product_help",
+        "health_information",
+        "health_follow_up",
+        "unrelated",
+        "unclear",
+    ]
+    direct_response: str | None = Field(default=None, max_length=1600)
+    clarification_question: str | None = Field(default=None, max_length=500)
+    searches: list[TargetedSearch] = Field(default_factory=list, max_length=4)
 
 
 class FinalChatAnswer(BaseModel):
@@ -71,13 +86,6 @@ class FinalChatAnswer(BaseModel):
     used_evidence_ids: list[str] = Field(
         description="Evidence IDs materially used to support the final answer."
     )
-
-
-class ChatResearchDecision(BaseModel):
-    decision: Literal["answer", "search_more"]
-    answer: FinalChatAnswer | None = None
-    missing_information: list[str] = Field(default_factory=list, max_length=4)
-    follow_up_searches: list[TargetedSearch] = Field(default_factory=list, max_length=4)
 
 
 class FinalHealthCheckAnswer(BaseModel):

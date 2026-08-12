@@ -1,7 +1,7 @@
 """Serializable domain models."""
 
 from app.models.schemas import (
-    ChatResearchDecision,
+    ChatPlan,
     EvidenceItem,
     FinalChatAnswer,
     FinalHealthCheckAnswer,
@@ -13,7 +13,7 @@ from app.models.schemas import (
 )
 
 __all__ = [
-    "ChatResearchDecision",
+    "ChatPlan",
     "EvidenceItem",
     "FinalChatAnswer",
     "FinalHealthCheckAnswer",

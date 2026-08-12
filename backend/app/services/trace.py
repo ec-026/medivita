@@ -12,6 +12,7 @@ TraceCallback = Callable[[dict[str, object]], None]
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _STAGES = {
     "safety",
+    "planning",
     "search",
     "page_retrieval",
     "evidence",
@@ -100,7 +101,14 @@ class ResearchTraceEmitter:
             self.callback(dict(event))
         return trace_id
 
-    def finish(self, *, rounds: int, evidence_count: int, citation_count: int) -> None:
+    def finish(
+        self,
+        *,
+        rounds: int,
+        evidence_count: int,
+        citation_count: int,
+        label: str = "Research complete",
+    ) -> None:
         total_ms = round((monotonic() - self.started) * 1000)
         self.summary = {
             "rounds": rounds,
@@ -111,7 +119,7 @@ class ResearchTraceEmitter:
         self.emit(
             stage="complete",
             status="completed",
-            label="Research complete",
+            label=label,
             round=rounds,
             evidence_count=evidence_count,
             citation_count=citation_count,

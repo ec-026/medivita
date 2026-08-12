@@ -2,7 +2,7 @@
 <h1 align="center">MediVita</h1>
 <p align="center"><strong>Health information, grounded in sources you choose.</strong></p>
 
-MediVita is a stateless React and Flask health-information companion. It supports a credential-free deterministic demo and an opt-in connected mode that retrieves actual pages from user-enabled sources before producing a bounded, structured synthesis. It is informational—not a diagnostic, triage, scoring, or treatment product.
+MediVita is a stateless React and Flask health-information companion. It supports a credential-free deterministic demo and an opt-in connected mode with bounded, structured planning that retrieves actual pages from user-enabled sources only when a Chat question needs research. It is informational—not a diagnostic, triage, scoring, or treatment product.
 
 ## Capabilities
 
@@ -21,17 +21,19 @@ MediVita is a stateless React and Flask health-information companion. It support
 flowchart LR
   U["React client"] --> A["Flask API"]
   A --> S["Deterministic safety"]
-  S --> D["Parallel DDGS trusted-source search"]
+  S --> P["Structured Chat planner"]
+  P -->|"direct or clarify"| U
+  P -->|"up to 4 targeted searches"| D["Parallel DDGS trusted-source search"]
   D --> F["Validated page fetch + extraction"]
   F --> E["Ranked bounded evidence E1…En"]
   E --> W["Bounded research controller"]
-  W -->|"1 or at most 2 calls"| L["LangChain ChatGroq"]
+  W -->|"grounded final answer"| L["LangChain ChatGroq"]
   L --> G["Groq: openai/gpt-oss-20b"]
   G --> M["Backend citation mapping"]
   M --> U
 ```
 
-Connected chat and Health Check use one model call when evidence is sufficient. The first structured decision may request at most four targeted searches against enabled sources; one final call then completes the response. There is no third round, autonomous loop, vector database, local model, or automatic cross-provider fallback. See [architecture.md](docs/architecture.md).
+Connected Chat first makes one structured, history-aware planning call. Direct and clarification actions stop there with no retrieval or citations. Research actions run one retrieval phase containing at most four targeted searches against enabled sources, followed by one grounded final-answer call. Health Check keeps its existing one-or-two-call grounded retrieval flow. There is no third Chat call, autonomous loop, vector database, local model, or automatic cross-provider fallback. See [architecture.md](docs/architecture.md).
 
 ## Stack
 
@@ -135,7 +137,7 @@ The command reports only backend names, result counts, trusted-result counts, an
 
 External response shapes and `SourceReference` remain stable. See [api.md](docs/api.md).
 
-The frontend prefers the streaming routes and falls back to the original JSON routes when streaming is unavailable before a result arrives. Completed traces are stored with new browser-local conversations as optional response metadata; older saved conversations remain compatible. Trace events describe externally observable operations such as trusted search, page/snippet retrieval, evidence counts, provider/model selection, citations, rounds, and elapsed time. They never contain prompts, raw evidence, system messages, hidden reasoning, or chain-of-thought.
+The frontend prefers the streaming routes and falls back to the original JSON routes when streaming is unavailable before a result arrives. Completed traces are stored with new browser-local conversations as optional response metadata; older saved conversations remain compatible. Trace events describe externally observable operations such as the bounded planning state, trusted search, page/snippet retrieval, evidence counts, provider/model selection, citations, rounds, and elapsed time. They never contain prompts, planner explanations, raw evidence, system messages, hidden reasoning, or chain-of-thought.
 
 ## Privacy and safety
 

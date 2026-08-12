@@ -13,6 +13,7 @@ const summary: ResearchSummary = {
 
 const events: ResearchTraceEvent[] = [
   { id: 'safety-1', stage: 'safety', status: 'completed', label: 'Safety screening complete', tool: 'Deterministic safety rules' },
+  { id: 'planning-1', stage: 'planning', status: 'completed', label: 'Trusted-source research planned', tool: 'LangChain structured planning', provider: 'groq', model: 'openai/gpt-oss-20b', message: '1 targeted search selected' },
   { id: 'search-1', stage: 'search', status: 'completed', label: 'Mayo Clinic search complete', tool: 'DDGS Search', source_id: 'mayo-clinic', source_name: 'Mayo Clinic', backend: 'bing', query: 'site:mayoclinic.org migraine symptoms', result_count: 2, round: 1 },
   { id: 'evidence-1', stage: 'evidence', status: 'completed', label: 'Relevant evidence selected', tool: 'MediVita Evidence Ranker', evidence_count: 4, round: 1 },
   { id: 'generation-1', stage: 'generation', status: 'completed', label: 'Grounded generation complete', tool: 'LangChain structured generation', provider: 'groq', model: 'openai/gpt-oss-20b', elapsed_ms: 920, round: 1 },
@@ -28,6 +29,7 @@ test('completed research is compact, friendly first, and technical on demand', a
   await userEvent.click(detailsToggle)
   expect(detailsToggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText(/Searched:.*migraine symptoms/)).toBeInTheDocument()
+  expect(screen.getByText('Trusted-source research planned')).toBeInTheDocument()
   expect(screen.queryByText(/site:mayoclinic\.org/)).not.toBeInTheDocument()
   expect(screen.queryByText(/DDGS Search/)).not.toBeInTheDocument()
   expect(screen.getByText('Selected 4 relevant pieces of information')).toBeInTheDocument()
@@ -37,20 +39,44 @@ test('completed research is compact, friendly first, and technical on demand', a
   expect(technicalToggle).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText(/site:mayoclinic\.org migraine symptoms/)).toBeInTheDocument()
   expect(screen.getByText(/DDGS Search.*Mayo Clinic.*Bing.*2 results/)).toBeInTheDocument()
-  expect(screen.getByText(/Groq.*openai\/gpt-oss-20b/)).toBeInTheDocument()
+  expect(screen.getAllByText(/Groq.*openai\/gpt-oss-20b/)).toHaveLength(2)
   expect(screen.getByText(/MediVita Citation Mapper.*3 trusted links/)).toBeInTheDocument()
 })
 
 test('running research stays open and uses natural-language progress', () => {
-  render(<ResearchActivity events={[{ ...events[1], status: 'running', label: 'Searching Mayo Clinic' }]} running />)
+  render(<ResearchActivity events={[{ ...events[2], status: 'running', label: 'Searching Mayo Clinic' }]} running />)
   expect(screen.getByRole('button', { name: /Searching trusted health sources/ })).toHaveAttribute('aria-expanded', 'true')
   expect(screen.getByText('Searching trusted health sources')).toBeInTheDocument()
   expect(screen.getByText(/Searched:.*migraine symptoms/)).toBeInTheDocument()
   expect(screen.queryByText(/site:mayoclinic\.org/)).not.toBeInTheDocument()
 })
 
+test('planning starts with a friendly understanding state', () => {
+  render(<ResearchActivity events={[
+    events[0],
+    { id: 'planning-running', stage: 'planning', status: 'running', label: 'Understanding your question' },
+  ]} running />)
+  expect(screen.getByRole('button', { name: /Understanding your question/ })).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByText('Understanding your question')).toBeInTheDocument()
+  expect(screen.queryByText(/Searching trusted health sources/)).not.toBeInTheDocument()
+})
+
+test.each(['No research needed', 'Clarification needed'])('%s is minimal and never implies external research', (label) => {
+  render(<ResearchActivity
+    events={[
+      events[0],
+      { id: 'planning-direct', stage: 'planning', status: 'completed', label },
+      { id: 'complete-direct', stage: 'complete', status: 'completed', label: 'Response ready' },
+    ]}
+    summary={{ rounds: 0, evidence_count: 0, citation_count: 0, total_ms: 10 }}
+  />)
+  expect(screen.getByText(label)).toBeInTheDocument()
+  expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  expect(screen.queryByText(/Demo response|Searching|DDGS|Groq/)).not.toBeInTheDocument()
+})
+
 test('round two is described naturally while exact metadata stays technical', async () => {
-  const secondRound = { ...events[1], id: 'search-2', round: 2, query: 'site:mayoclinic.org migraine warning signs' }
+  const secondRound = { ...events[2], id: 'search-2', round: 2, query: 'site:mayoclinic.org migraine warning signs' }
   render(<ResearchActivity events={[...events, secondRound]} summary={{ ...summary, rounds: 2 }} initiallyExpanded />)
   expect(screen.getByText('Looking for a little more information')).toBeInTheDocument()
   expect(screen.getByText(/Searched:.*migraine warning signs/)).toBeInTheDocument()

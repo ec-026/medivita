@@ -15,7 +15,14 @@ export function ResearchActivity({ events, summary, running = false, initiallyEx
   useEffect(() => { if (running) setDetailsOpen(true) }, [running])
   if (normalized.length === 0) return null
 
-  const demo = summary?.rounds === 0 || normalized.some((event) => event.label === 'Demo mode')
+  const demo = normalized.some((event) => event.label === 'Demo mode')
+  const nonResearchPlan = normalized.find((event) => event.stage === 'planning' && event.status === 'completed' && (event.label === 'No research needed' || event.label === 'Clarification needed'))
+  if (!running && nonResearchPlan) {
+    return <section className="my-4 flex min-h-9 items-center gap-2 py-1.5 text-[14px] font-medium text-muted" aria-label="Research activity">
+      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-mint-pale text-brand"><Check size={12} strokeWidth={2.4} /></span>
+      <span>{nonResearchPlan.label}</span>
+    </section>
+  }
   const sourceCount = new Set(normalized.filter((event) => event.stage === 'search' && event.status === 'completed').map((event) => event.source_id).filter(Boolean)).size
   const headline = demo ? 'Demo response · no external research' : running ? runningLabel(normalized) : `Research complete${sourceCount ? ` · ${sourceCount} trusted source${sourceCount === 1 ? '' : 's'}` : ''}`
 
@@ -37,6 +44,7 @@ export function ResearchActivity({ events, summary, running = false, initiallyEx
 }
 
 function FriendlyDetails({ events, summary, running }: { events: ResearchTraceEvent[]; summary?: ResearchSummary; running: boolean }) {
+  const planning = events.find((event) => event.stage === 'planning')
   const searches = events.filter((event) => event.stage === 'search' && event.status !== 'warning')
   const hasSecondRound = events.some((event) => (event.round || 1) > 1)
   const hasReading = events.some((event) => event.stage === 'page_retrieval' || event.stage === 'evidence')
@@ -46,6 +54,7 @@ function FriendlyDetails({ events, summary, running }: { events: ResearchTraceEv
   const citationCount = summary?.citation_count ?? [...events].reverse().find((event) => event.citation_count !== undefined)?.citation_count
   return <div className="space-y-3 py-1">
     <FriendlyStep done label="Safety screening complete" />
+    {planning && <FriendlyStep done={planning.status === 'completed'} active={planning.status === 'running'} label={planning.status === 'running' ? 'Understanding your question' : planning.label} />}
     {searches.length > 0 && <div><FriendlyStep done={!searches.some((event) => event.status === 'running')} active={searches.some((event) => event.status === 'running')} label={hasSecondRound ? 'Looking for a little more information' : 'Searching trusted health sources'} /><div className="ml-6 mt-1.5 space-y-2">{searches.map((event) => <div key={event.id} className="min-w-0 text-[13px] leading-5 text-muted"><p><span className="font-semibold text-ink">{event.source_name || 'Trusted source'}</span>{event.result_count !== undefined ? ` · ${event.result_count} result${event.result_count === 1 ? '' : 's'}` : ''}</p>{event.query && <p className="mt-0.5 break-words text-faint">Searched: “{friendlyQuery(event.query)}”</p>}</div>)}</div></div>}
     {hasReading && <FriendlyStep done label={evidenceCount !== undefined ? `Selected ${evidenceCount} relevant piece${evidenceCount === 1 ? '' : 's'} of information` : 'Reading relevant information'} />}
     {hasGeneration && <FriendlyStep done={!generationRunning} active={generationRunning} label={generationRunning ? 'Preparing your answer' : 'Prepared a grounded answer'} />}
@@ -63,7 +72,7 @@ function runningLabel(events: ResearchTraceEvent[]) {
   if (events.some((event) => (event.round || 1) > 1)) return 'Looking for a little more information…'
   if (events.some((event) => event.stage === 'page_retrieval' || event.stage === 'evidence')) return 'Reading relevant information…'
   if (events.some((event) => event.stage === 'search')) return 'Searching trusted health sources…'
-  return 'Starting trusted research…'
+  return 'Understanding your question…'
 }
 
 function friendlyQuery(query: string) { return query.replace(/^site:\S+\s*/i, '').trim() }

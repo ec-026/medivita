@@ -5,14 +5,15 @@ from ddgs.exceptions import DDGSException
 from app import create_app
 from app.config import TestConfig
 from app.models import (
-    ChatResearchDecision,
+    ChatPlan,
     EvidenceItem,
     FinalChatAnswer,
     SearchResult,
     TargetedSearch,
 )
 from app.providers.search import DuckDuckGoSearchProvider, SearchProvider
-from app.services.research import BoundedResearchController
+from app.services.chat import ChatService
+from app.services.research import BoundedResearchController, ChatControllerAnswer
 from app.services.retrieval import RetrievalService
 from app.services.trace import ResearchTraceEmitter
 
@@ -82,22 +83,37 @@ class FakeRetrieval:
     def retrieve(self, *_args):
         return [evidence()]
 
-    def retrieve_targeted(self, _searches):
-        return self.additions
+    def retrieve_targeted(self, _searches, *, round_number=2):
+        return self.additions or [evidence()]
 
 
 class FakeLLM:
     provider_name = "groq"
     model_name = "openai/gpt-oss-20b"
 
-    def __init__(self, decisions):
-        self.decisions = list(decisions)
-        self.calls = 0
+    def __init__(self, plan, answer=None):
+        self.plan = plan
+        self.answer = answer
+        self.plan_calls = 0
+        self.answer_calls = 0
 
-    def chat_decision(self, *_args):
-        decision = self.decisions[self.calls]
-        self.calls += 1
-        return decision
+    def chat_plan(self, *_args):
+        self.plan_calls += 1
+        return self.plan
+
+    def chat_answer(self, *_args):
+        self.answer_calls += 1
+        return self.answer
+
+
+def research_plan():
+    return ChatPlan(
+        action="research",
+        intent="health_information",
+        searches=[
+            TargetedSearch(source_id="healthline", query="migraine warning signs")
+        ],
+    )
 
 
 def test_search_trace_exposes_real_backend_query_count_and_only_enabled_source():
@@ -168,7 +184,7 @@ def test_page_and_snippet_retrieval_emit_safe_events_and_evidence_count():
 
 def test_generation_trace_has_groq_model_without_fake_second_round():
     trace = ResearchTraceEmitter()
-    llm = FakeLLM([ChatResearchDecision(decision="answer", answer=final_answer())])
+    llm = FakeLLM(research_plan(), final_answer())
     BoundedResearchController(FakeRetrieval(), llm, trace=trace).chat(
         "question", ["healthline"], []
     )
@@ -177,6 +193,9 @@ def test_generation_trace_has_groq_model_without_fake_second_round():
     assert generation[0]["provider"] == "groq"
     assert generation[0]["model"] == "openai/gpt-oss-20b"
     assert generation[0]["round"] == 1
+    assert llm.plan_calls == 1
+    assert llm.answer_calls == 1
+    assert any(event["stage"] == "planning" for event in trace.events)
     assert trace.summary == {
         "rounds": 1,
         "evidence_count": 1,
@@ -185,26 +204,98 @@ def test_generation_trace_has_groq_model_without_fake_second_round():
     }
 
 
-def test_second_research_round_is_traced_only_when_controller_requests_it():
+def test_direct_trace_has_no_fake_search_retrieval_or_generation():
     trace = ResearchTraceEmitter()
     llm = FakeLLM(
-        [
-            ChatResearchDecision(
-                decision="search_more",
-                follow_up_searches=[
-                    TargetedSearch(source_id="healthline", query="migraine warning signs")
-                ],
-            ),
-            ChatResearchDecision(decision="answer", answer=final_answer()),
-        ]
+        ChatPlan(
+            action="direct",
+            intent="greeting",
+            direct_response="Hello! How can I help?",
+        )
     )
-    BoundedResearchController(FakeRetrieval([evidence("E2")]), llm, trace=trace).chat(
-        "question", ["healthline"], []
+    outcome, sources, calls = BoundedResearchController(
+        FakeRetrieval(), llm, trace=trace
+    ).chat("Hello", ["healthline"], [])
+    assert outcome.response_kind == "direct"
+    assert sources == []
+    assert calls == 1
+    assert llm.plan_calls == 1
+    assert llm.answer_calls == 0
+    assert not any(
+        event["stage"] in {"search", "page_retrieval", "evidence", "generation", "citation"}
+        for event in trace.events
     )
-    assert llm.calls == 2
-    assert any(event.get("round") == 2 for event in trace.events)
-    assert any(event["label"] == "Additional research requested" for event in trace.events)
-    assert trace.summary["rounds"] == 2
+    assert any(event["label"] == "No research needed" for event in trace.events)
+    assert trace.summary["rounds"] == 0
+
+
+def test_trace_exposes_only_executed_targeted_searches_and_no_planner_explanation():
+    trace = ResearchTraceEmitter()
+    provider = DuckDuckGoSearchProvider(
+        ddgs_factory=TraceDDGS,
+        cache_ttl=0,
+        results_per_source=1,
+        trace=trace,
+    )
+    retrieval = RetrievalService(provider, cache_ttl=0, trace=trace)
+    retrieval._fetch_page = lambda _result: "Readable migraine evidence."
+    llm = FakeLLM(research_plan(), final_answer())
+    BoundedResearchController(retrieval, llm, trace=trace).chat(
+        "raw user wording", ["healthline"], []
+    )
+    search_events = [
+        event
+        for event in trace.events
+        if event["stage"] == "search" and event["status"] == "completed"
+    ]
+    assert search_events
+    assert all("migraine warning signs" in str(event.get("query")) for event in search_events)
+    serialized = json.dumps(trace.events).lower()
+    assert "raw user wording" not in serialized
+    assert "chain_of_thought" not in serialized
+    assert "thought:" not in serialized
+    assert "reasoning:" not in serialized
+    assert '"reason"' not in serialized
+
+
+def test_urgent_safety_trace_precedes_planning_and_direct_response(monkeypatch):
+    class ConnectedTestConfig(TestConfig):
+        LLM_PROVIDER = "groq"
+        SEARCH_PROVIDER = "duckduckgo"
+
+    def build_controller(_config, trace=None):
+        class Controller:
+            def chat(self, *_args):
+                trace.emit(
+                    stage="planning",
+                    status="completed",
+                    label="No research needed",
+                    tool="LangChain structured planning",
+                )
+                trace.finish(
+                    rounds=0,
+                    evidence_count=0,
+                    citation_count=0,
+                    label="Response ready",
+                )
+                return ChatControllerAnswer("direct", "Please seek urgent help."), [], 1
+
+        return Controller()
+
+    monkeypatch.setattr("app.services.chat.build_research_controller", build_controller)
+    app = create_app(ConnectedTestConfig)
+    trace = ResearchTraceEmitter()
+    with app.app_context():
+        result = ChatService().respond(
+            "I cannot breathe",
+            ["healthline"],
+            [],
+            trace,
+        )
+    assert [event["stage"] for event in trace.events][:2] == ["safety", "planning"]
+    assert result["safety_notice"]
+    assert result["response_kind"] == "direct"
+    assert result["sources"] == []
 
 
 def test_stream_endpoint_preserves_standard_contract_and_serializes_safe_trace(monkeypatch):

@@ -1,7 +1,7 @@
 import pytest
 from ddgs.exceptions import DDGSException
 
-from app.models import ChatResearchDecision, HealthResearchDecision
+from app.models import ChatPlan, FinalChatAnswer, HealthResearchDecision
 from app.providers.llm import GroqProvider, OpenRouterProvider
 from app.providers.news import DuckDuckGoNewsProvider
 from app.utils.errors import ServiceError
@@ -86,7 +86,7 @@ def test_groq_normalizes_rate_limit():
         chat_model=RaisingChat(StatusError("limited")),
     )
     with pytest.raises(ServiceError) as raised:
-        provider.chat_decision("question", [], [], ["healthline"], False)
+        provider.chat_plan("question", [], ["healthline"])
     assert raised.value.code == "AI_RATE_LIMITED"
     assert raised.value.status == 429
 
@@ -98,7 +98,7 @@ def test_groq_normalizes_timeout():
         chat_model=RaisingChat(TimeoutFailure("timeout")),
     )
     with pytest.raises(ServiceError) as raised:
-        provider.chat_decision("question", [], [], ["healthline"], False)
+        provider.chat_plan("question", [], ["healthline"])
     assert raised.value.code == "AI_TIMEOUT"
     assert raised.value.status == 504
 
@@ -135,10 +135,18 @@ def test_openrouter_remains_an_explicit_optional_provider(monkeypatch):
 
 
 def test_final_answer_schemas_require_used_evidence_ids_field():
-    chat_schema = ChatResearchDecision.model_json_schema()["$defs"]["FinalChatAnswer"]
+    chat_schema = FinalChatAnswer.model_json_schema()
     health_schema = HealthResearchDecision.model_json_schema()["$defs"]["FinalHealthCheckAnswer"]
     assert "used_evidence_ids" in chat_schema["required"]
     assert "used_evidence_ids" in health_schema["required"]
+
+
+def test_chat_plan_schema_contains_no_reasoning_or_explanation_fields():
+    serialized = str(ChatPlan.model_json_schema()).lower()
+    assert "reasoning" not in serialized
+    assert "chain_of_thought" not in serialized
+    assert "missing_information" not in serialized
+    assert "reason" not in ChatPlan.model_json_schema()["$defs"]["TargetedSearch"]["properties"]
 
 
 def test_live_news_uses_actual_allowlisted_urls():

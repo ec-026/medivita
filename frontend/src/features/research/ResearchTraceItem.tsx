@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, Circle, FileSearch, Link2, ListFilter, LoaderCircle, Search, ShieldCheck, Sparkles } from 'lucide-react'
 import type { ResearchStage, ResearchTraceEvent } from '../../types/research'
 
-const STAGE_ICONS: Record<ResearchStage, typeof Search> = { safety: ShieldCheck, search: Search, page_retrieval: FileSearch, evidence: ListFilter, research_decision: Circle, generation: Sparkles, citation: Link2, complete: CheckCircle2 }
+const STAGE_ICONS: Record<ResearchStage, typeof Search> = { safety: ShieldCheck, planning: Circle, search: Search, page_retrieval: FileSearch, evidence: ListFilter, research_decision: Circle, generation: Sparkles, citation: Link2, complete: CheckCircle2 }
 
 export function ResearchTraceItem({ event }: { event: ResearchTraceEvent }) {
   const StageIcon = STAGE_ICONS[event.stage]

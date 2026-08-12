@@ -11,13 +11,13 @@ from langchain_groq import ChatGroq
 from langchain_openrouter import ChatOpenRouter
 from pydantic import BaseModel
 
-from app.models import ChatResearchDecision, EvidenceItem, HealthResearchDecision
+from app.models import ChatPlan, EvidenceItem, FinalChatAnswer, HealthResearchDecision
 from app.utils.errors import ServiceError
 
 LOGGER = logging.getLogger(__name__)
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
-SAFETY_SYSTEM_PROMPT = """You are MediVita, an informational health research assistant.
+GROUNDED_SYSTEM_PROMPT = """You are MediVita, an informational health research assistant.
 Use only the supplied evidence. Never diagnose, estimate a probability, calculate a health score,
 or promise that an action is safe. State uncertainty and evidence limits. Do not invent facts,
 source URLs, evidence IDs, or source endorsements. Every factual health claim in a final answer
@@ -35,6 +35,37 @@ narrow searches, each targeting one of the enabled source IDs. On a required-fin
 must be answer even when evidence is limited; keep the answer within what the evidence supports and
 clearly explain those limits. Never request a third round."""
 
+CHAT_PLANNER_SYSTEM_PROMPT = """You are MediVita's bounded chat planner. Return only the
+requested structured operational plan. Never reveal, summarize, or store chain-of-thought,
+private reasoning, hidden analysis, or evidence content.
+
+Safety screening has already run and always takes precedence. Use the recent conversation history
+to interpret follow-ups. Choose exactly one action:
+- direct: greetings, thanks, ordinary conversation, MediVita product help, clearly unrelated
+  requests that need a brief boundary response, or responses that only restate already established
+  context without adding factual health claims. Put the complete user-facing reply in
+  direct_response. Do not make new health claims or claim that research occurred.
+- clarify: a useful answer or safe targeted search depends on missing meaning, subject, or context.
+  Ask one concise user-facing question in clarification_question.
+- research: factual health information, health guidance, current medical claims, or a health
+  follow-up that needs external evidence. Provide one to four narrow targeted searches using only
+  enabled source IDs. Queries must be ordinary search terms without site: operators or raw URLs.
+
+For direct and clarify, searches must be empty. For research, direct_response and
+clarification_question must be empty. Never include explanations for why a search was selected."""
+
+CHAT_ANSWER_SYSTEM_PROMPT = """You are MediVita, an informational health research assistant.
+Use only the supplied evidence. Never diagnose, estimate a probability, calculate a health score,
+or promise that an action is safe. State uncertainty and evidence limits. Do not invent facts,
+source URLs, evidence IDs, or source endorsements. Every factual health claim must be materially
+supported by supplied evidence. Do not add medications, doses, devices, statistics, warning signs,
+or medical triggers unless the evidence supports them. used_evidence_ids must contain at least one
+exact supplied evidence ID that materially supports the answer. Never cite an ID merely because it
+was supplied. Encourage qualified professional care for persistent, worsening, or concerning
+symptoms. For possible emergencies, advise urgent medical help or local emergency services without
+naming a country-specific number. Keep self-care conservative and conditional. Return the complete
+four-section answer in the requested schema. Never request more research."""
+
 
 class StructuredLLMProvider:
     def __init__(
@@ -49,29 +80,60 @@ class StructuredLLMProvider:
         self.provider_name = provider_name
         self.model_name = model_name
         self.structured_strict = structured_strict
-        self.prompt = ChatPromptTemplate.from_messages(
+        self.grounded_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", SAFETY_SYSTEM_PROMPT),
+                ("system", GROUNDED_SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="history", optional=True),
+                ("human", "{request}"),
+            ]
+        )
+        self.planner_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", CHAT_PLANNER_SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="history", optional=True),
+                ("human", "{request}"),
+            ]
+        )
+        self.chat_answer_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", CHAT_ANSWER_SYSTEM_PROMPT),
                 MessagesPlaceholder(variable_name="history", optional=True),
                 ("human", "{request}"),
             ]
         )
 
-    def chat_decision(
+    def chat_plan(
+        self,
+        question: str,
+        history: list[dict[str, str]],
+        enabled_source_ids: list[str],
+    ) -> ChatPlan:
+        request = (
+            "Task: Select a bounded action for the latest user message.\n"
+            f"Latest user message: {question}\n"
+            f"Enabled source IDs: {sorted(set(enabled_source_ids))}"
+        )
+        messages = self.planner_prompt.invoke(
+            {"history": _history_messages(history), "request": request}
+        ).to_messages()
+        return self._invoke_structured(ChatPlan, messages)
+
+    def chat_answer(
         self,
         question: str,
         history: list[dict[str, str]],
         evidence: list[EvidenceItem],
         enabled_source_ids: list[str],
-        require_answer: bool,
-    ) -> ChatResearchDecision:
+    ) -> FinalChatAnswer:
         request = (
             f"Task: Answer the health-information question.\nQuestion: {question}\n"
             f"Enabled source IDs: {sorted(set(enabled_source_ids))}\n"
-            f"Required final round: {require_answer}\nEvidence:\n{_format_evidence(evidence)}"
+            f"Evidence:\n{_format_evidence(evidence)}"
         )
-        messages = self.prompt.invoke({"history": _history_messages(history), "request": request}).to_messages()
-        return self._invoke_structured(ChatResearchDecision, messages)
+        messages = self.chat_answer_prompt.invoke(
+            {"history": _history_messages(history), "request": request}
+        ).to_messages()
+        return self._invoke_structured(FinalChatAnswer, messages)
 
     def health_decision(
         self,
@@ -87,7 +149,7 @@ class StructuredLLMProvider:
             f"Enabled source IDs: {sorted(set(enabled_source_ids))}\n"
             f"Required final round: {require_answer}\nEvidence:\n{_format_evidence(evidence)}"
         )
-        messages = self.prompt.invoke({"history": [], "request": request}).to_messages()
+        messages = self.grounded_prompt.invoke({"history": [], "request": request}).to_messages()
         return self._invoke_structured(HealthResearchDecision, messages)
 
     def _invoke_structured(self, schema: type[SchemaT], messages: list[BaseMessage]) -> SchemaT:

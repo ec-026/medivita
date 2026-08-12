@@ -1,5 +1,6 @@
 export type ResearchStage =
   | 'safety'
+  | 'planning'
   | 'search'
   | 'page_retrieval'
   | 'evidence'

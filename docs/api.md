@@ -59,11 +59,12 @@ The message must contain 2–3000 characters. At least one source is required. O
   ],
   "safety_notice": null,
   "mode": "connected",
+  "response_kind": "researched",
   "disclaimer": "General health information only; not medical advice, diagnosis, or treatment."
 }
 ```
 
-In demo mode, sources are explicitly titled homepage references. In connected mode, valid model-selected evidence IDs map exactly. If a final answer contains no valid IDs, the backend returns up to three validated, canonical-deduplicated references from the ranked evidence supplied to that model call; it does not return a connected answer with an empty `sources` list.
+In demo mode, sources are explicitly titled homepage references. Connected Chat adds `response_kind`, with `direct`, `clarification`, or `researched`. Direct and clarification responses contain one response section and intentionally return `sources: []`. Researched responses retain the four sections above. For researched responses, valid model-selected evidence IDs map exactly. If a final answer contains no valid IDs, the backend returns up to three validated, canonical-deduplicated references from the ranked evidence supplied to that model call; it does not return a researched answer with an empty `sources` list.
 
 ### Streaming chat
 
@@ -71,11 +72,11 @@ In demo mode, sources are explicitly titled homepage references. In connected mo
 
 ```json
 {"event":"trace","data":{"id":"search-2","stage":"search","status":"completed","label":"Mayo Clinic search complete","tool":"DDGS Search","source_id":"mayo-clinic","source_name":"Mayo Clinic","backend":"bing","query":"site:mayoclinic.org migraine patterns","result_count":2,"round":1}}
-{"event":"result","data":{"answer":"...","sections":[],"sources":[],"safety_notice":null,"mode":"connected","disclaimer":"...","research_trace":[],"research_summary":{"rounds":1,"evidence_count":4,"citation_count":3,"total_ms":7735}}}
+{"event":"result","data":{"answer":"...","sections":[],"sources":[],"safety_notice":null,"mode":"connected","response_kind":"researched","disclaimer":"...","research_trace":[],"research_summary":{"rounds":1,"evidence_count":4,"citation_count":3,"total_ms":7735}}}
 {"event":"done"}
 ```
 
-Normalized stream errors use `{"event":"error","data":{"code":"...","message":"..."}}` and never include stack traces. `research_trace` and `research_summary` are optional backward-compatible final-response fields. Trace metadata describes observable application operations, not model reasoning. It excludes prompts, history, raw evidence, credentials, headers, system messages, and chain-of-thought.
+Normalized stream errors use `{"event":"error","data":{"code":"...","message":"..."}}` and never include stack traces. `research_trace` and `research_summary` are optional backward-compatible final-response fields. Chat traces begin with safety and structured planning. Direct and clarification outcomes show a minimal completed planning state without fake search, retrieval, evidence, generation, or citation events. Trace metadata describes observable application operations, not model reasoning. It excludes prompts, history, planner explanations, raw evidence, credentials, headers, system messages, and chain-of-thought.
 
 ## Health Check
 

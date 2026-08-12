@@ -60,9 +60,12 @@ class RetrievalService:
             self.search.search(query, source_ids), round_number=1
         )
 
-    def retrieve_targeted(self, searches: list[TargetedSearch]) -> list[EvidenceItem]:
+    def retrieve_targeted(
+        self, searches: list[TargetedSearch], *, round_number: int = 2
+    ) -> list[EvidenceItem]:
         return self._to_evidence(
-            self.search.search_targeted(searches), round_number=2
+            self.search.search_targeted(searches, round_number=round_number),
+            round_number=round_number,
         )
 
     def _to_evidence(

@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from time import monotonic
+from typing import Literal
 from uuid import uuid4
 
-from app.models import EvidenceItem, SourceReference, TargetedSearch
+from app.models import EvidenceItem, FinalChatAnswer, SourceReference, TargetedSearch
 from app.services.retrieval import RetrievalService, merge_evidence
 from app.services.trace import ResearchTraceEmitter
 from app.utils.errors import ServiceError
@@ -21,6 +22,13 @@ class CitationResolution:
     references: list[SourceReference]
     valid_model_evidence_ids: int
     fallback_used: bool
+
+
+@dataclass(frozen=True)
+class ChatControllerAnswer:
+    response_kind: Literal["direct", "researched", "clarification"]
+    answer: str
+    grounded_answer: FinalChatAnswer | None = None
 
 
 class BoundedResearchController:
@@ -42,11 +50,68 @@ class BoundedResearchController:
         question: str,
         source_ids: list[str],
         history: list[dict[str, str]],
-    ) -> tuple[object, list[SourceReference], int]:
+    ) -> tuple[ChatControllerAnswer, list[SourceReference], int]:
         started = monotonic()
         request_id = uuid4().hex[:12]
+        planning_started = monotonic()
+        planning_id = self._planning_started()
+        plan = self.llm.chat_plan(question, history, source_ids)
+        planning_ms = (monotonic() - planning_started) * 1000
+        calls = 1
+
+        if plan.action == "direct":
+            response = (plan.direct_response or "").strip()
+            if not response:
+                raise ServiceError(
+                    "AI_INVALID_RESPONSE",
+                    "The AI provider did not return a usable direct response.",
+                    502,
+                )
+            self._planning_completed(planning_id, "No research needed", planning_ms)
+            self._finish_non_research_trace()
+            self._log_chat_completion(
+                request_id=request_id,
+                response_kind="direct",
+                model_calls=calls,
+                planning_ms=planning_ms,
+                total_ms=(monotonic() - started) * 1000,
+            )
+            return ChatControllerAnswer("direct", response), [], calls
+
+        if plan.action == "clarify":
+            clarification = (plan.clarification_question or "").strip()
+            if not clarification:
+                raise ServiceError(
+                    "AI_INVALID_RESPONSE",
+                    "The AI provider did not return a usable clarification question.",
+                    502,
+                )
+            self._planning_completed(planning_id, "Clarification needed", planning_ms)
+            self._finish_non_research_trace()
+            self._log_chat_completion(
+                request_id=request_id,
+                response_kind="clarification",
+                model_calls=calls,
+                planning_ms=planning_ms,
+                total_ms=(monotonic() - started) * 1000,
+            )
+            return ChatControllerAnswer("clarification", clarification), [], calls
+
+        searches = _allowed_searches(plan.searches, source_ids)
+        if not searches:
+            raise ServiceError(
+                "AI_INVALID_RESPONSE",
+                "The AI provider did not return a usable trusted-source research plan.",
+                502,
+            )
+        self._planning_completed(
+            planning_id,
+            "Trusted-source research planned",
+            planning_ms,
+            message=f"{len(searches)} targeted search{'es' if len(searches) != 1 else ''} selected",
+        )
         retrieval_started = monotonic()
-        evidence = self.retrieval.retrieve(question, source_ids)
+        evidence = self.retrieval.retrieve_targeted(searches, round_number=1)
         retrieval_ms = (monotonic() - retrieval_started) * 1000
         if not evidence:
             raise ServiceError(
@@ -56,35 +121,10 @@ class BoundedResearchController:
             )
         llm_started = monotonic()
         generation_id = self._generation_started(1, "Generate grounded answer")
-        first = self.llm.chat_decision(question, history, evidence, source_ids, False)
-        llm_ms = (monotonic() - llm_started) * 1000
-        self._generation_completed(generation_id, 1, llm_ms)
-        calls = 1
-        if first.decision == "answer" and first.answer is not None:
-            self._decision_event(1, additional_research=False)
-            answer = first.answer
-        else:
-            self._decision_event(1, additional_research=True)
-            searches = _allowed_searches(first.follow_up_searches, source_ids)
-            retrieval_started = monotonic()
-            additions = self.retrieval.retrieve_targeted(searches) if searches else []
-            retrieval_ms += (monotonic() - retrieval_started) * 1000
-            evidence = merge_evidence(evidence, additions, self.total_chars)
-            llm_started = monotonic()
-            generation_id = self._generation_started(2, "Generate final grounded answer")
-            second = self.llm.chat_decision(question, history, evidence, source_ids, True)
-            second_llm_ms = (monotonic() - llm_started) * 1000
-            llm_ms += second_llm_ms
-            self._generation_completed(generation_id, 2, second_llm_ms)
-            calls = 2
-            if second.decision != "answer" or second.answer is None:
-                raise ServiceError(
-                    "AI_INVALID_RESPONSE",
-                    "The AI provider did not return a usable grounded answer.",
-                    502,
-                )
-            answer = second.answer
-            self._decision_event(2, additional_research=False)
+        answer = self.llm.chat_answer(question, history, evidence, source_ids)
+        generation_ms = (monotonic() - llm_started) * 1000
+        self._generation_completed(generation_id, 1, generation_ms)
+        calls = 2
         citations = _resolve_references(answer.used_evidence_ids, evidence, source_ids)
         references = citations.references
         if not references:
@@ -93,27 +133,28 @@ class BoundedResearchController:
                 "No usable trusted-source evidence could be cited. Please try again.",
                 503,
             )
-        self._citation_event(len(references), citations.fallback_used, calls)
+        self._citation_event(len(references), citations.fallback_used, 1)
         if self.trace:
             self.trace.finish(
-                rounds=calls,
+                rounds=1,
                 evidence_count=len(evidence),
                 citation_count=len(references),
             )
-        LOGGER.info(
-            "Research complete (request_id=%s, kind=chat, rounds=%s, evidence=%s, model_evidence_ids=%s, valid_model_evidence_ids=%s, sources=%s, citation_fallback=%s, retrieval_ms=%s, llm_ms=%s, total_ms=%s)",
-            request_id,
-            calls,
-            len(evidence),
-            len(answer.used_evidence_ids),
-            citations.valid_model_evidence_ids,
-            len(references),
-            str(citations.fallback_used).lower(),
-            round(retrieval_ms),
-            round(llm_ms),
-            round((monotonic() - started) * 1000),
+        self._log_chat_completion(
+            request_id=request_id,
+            response_kind="researched",
+            model_calls=calls,
+            planning_ms=planning_ms,
+            total_ms=(monotonic() - started) * 1000,
+            evidence_count=len(evidence),
+            citation_count=len(references),
+            retrieval_ms=retrieval_ms,
+            generation_ms=generation_ms,
+            model_evidence_ids=len(answer.used_evidence_ids),
+            valid_model_evidence_ids=citations.valid_model_evidence_ids,
+            citation_fallback=citations.fallback_used,
         )
-        return answer, references, calls
+        return ChatControllerAnswer("researched", answer.overview, answer), references, calls
 
     def health(self, description: str, source_ids: list[str]) -> tuple[object, list[SourceReference], int]:
         started = monotonic()
@@ -140,7 +181,11 @@ class BoundedResearchController:
             self._decision_event(1, additional_research=True)
             searches = _allowed_searches(first.follow_up_searches, source_ids)
             retrieval_started = monotonic()
-            additions = self.retrieval.retrieve_targeted(searches) if searches else []
+            additions = (
+                self.retrieval.retrieve_targeted(searches, round_number=2)
+                if searches
+                else []
+            )
             retrieval_ms += (monotonic() - retrieval_started) * 1000
             evidence = merge_evidence(evidence, additions, self.total_chars)
             llm_started = monotonic()
@@ -187,6 +232,81 @@ class BoundedResearchController:
             round((monotonic() - started) * 1000),
         )
         return answer, references, calls
+
+    def _planning_started(self) -> str | None:
+        if not self.trace:
+            return None
+        return self.trace.emit(
+            stage="planning",
+            status="running",
+            label="Understanding your question",
+            tool="LangChain structured planning",
+            provider=getattr(self.llm, "provider_name", None),
+            model=getattr(self.llm, "model_name", None),
+        )
+
+    def _planning_completed(
+        self,
+        event_id: str | None,
+        label: str,
+        elapsed_ms: float,
+        *,
+        message: str | None = None,
+    ) -> None:
+        if self.trace and event_id:
+            self.trace.emit(
+                event_id=event_id,
+                stage="planning",
+                status="completed",
+                label=label,
+                tool="LangChain structured planning",
+                provider=getattr(self.llm, "provider_name", None),
+                model=getattr(self.llm, "model_name", None),
+                elapsed_ms=round(elapsed_ms),
+                message=message,
+            )
+
+    def _finish_non_research_trace(self) -> None:
+        if self.trace:
+            self.trace.finish(
+                rounds=0,
+                evidence_count=0,
+                citation_count=0,
+                label="Response ready",
+            )
+
+    @staticmethod
+    def _log_chat_completion(
+        *,
+        request_id: str,
+        response_kind: str,
+        model_calls: int,
+        planning_ms: float,
+        total_ms: float,
+        evidence_count: int = 0,
+        citation_count: int = 0,
+        retrieval_ms: float = 0,
+        generation_ms: float = 0,
+        model_evidence_ids: int = 0,
+        valid_model_evidence_ids: int = 0,
+        citation_fallback: bool = False,
+    ) -> None:
+        LOGGER.info(
+            "Chat complete (request_id=%s, response_kind=%s, model_calls=%s, research_passes=%s, evidence=%s, model_evidence_ids=%s, valid_model_evidence_ids=%s, sources=%s, citation_fallback=%s, planning_ms=%s, retrieval_ms=%s, generation_ms=%s, total_ms=%s)",
+            request_id,
+            response_kind,
+            model_calls,
+            1 if response_kind == "researched" else 0,
+            evidence_count,
+            model_evidence_ids,
+            valid_model_evidence_ids,
+            citation_count,
+            str(citation_fallback).lower(),
+            round(planning_ms),
+            round(retrieval_ms),
+            round(generation_ms),
+            round(total_ms),
+        )
 
     def _generation_started(self, round_number: int, label: str) -> str | None:
         if not self.trace:
